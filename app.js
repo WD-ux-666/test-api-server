@@ -83,11 +83,28 @@ const authMiddleware = (req,res,next) =>{
 app.get('/api/test',(req ,res) =>{
     res.send({code:200,msg:'前后端连接成功',data:null})
 })
-// 2. 查询数据表所有数据接口
+// 2. 查询用户列表接口（分页）
 app.get('/api/user/list',authMiddleware,asyncHandler(async(req ,res)=>{
-   
-        const[row]=await pool.query('SELECT * FROM user');
-        res.send({code:200,msg:'查询成功',data:row})
+    const page = parseInt(req.query.page) ||1
+    const pageSize = parseInt(req.query.pageSize)||10
+    //计算跳过的条数
+    const offset = (page-1) *pageSize
+    //两条sql：先查总数（供前端分页器显示），再查当前页数据
+    const [[{total}]] = await pool.query('SELECT COUNT(*) AS total FROM user')
+    const[row]=await pool.query('SELECT id, name, age, DATE_FORMAT(create_time, "%Y-%m-%d %H:%i:%s") AS create_time FROM user LIMIT ? OFFSET ?',[pageSize, offset]);
+    res.send({code:200,msg:'查询成功',data:{list:row,total}})
+}))
+
+// 2.1 按ID查询单个用户接口
+app.get('/api/user/detail/:id',authMiddleware,asyncHandler(async(req,res)=>{
+    const id = req.params.id;
+    if(!id) return res.send({code:400,msg:'id不能为空'});
+
+    const [row] = await pool.query('SELECT id, name, age, DATE_FORMAT(create_time, "%Y-%m-%d %H:%i:%s") AS create_time FROM user WHERE id=?', [id]);
+    if(row.length === 0){
+        return res.send({code:404,msg:'用户不存在'});
+    }
+    res.send({code:200,msg:'查询成功',data:row[0]})
 }))
 
 // 3. 新增用户
