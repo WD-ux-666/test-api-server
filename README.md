@@ -14,10 +14,11 @@
 ## 功能亮点
 1. 服务启动自动创建 user 用户数据表，无需手动建表；
 2. 统一接口返回格式，区分成功/失败状态码；
-3. 完整用户管理接口：新增、查询、修改、删除；
+3. 完整用户管理接口：新增、查询（列表/单查）、修改、删除；
 4. 参数合法性校验，捕获数据库异常并返回错误信息；
 5. 使用连接池优化 MySQL 数据库连接性能；
-6. JWT 登录鉴权，用户管理接口需携带 Token 访问。
+6. JWT 登录鉴权，用户管理接口需携带 Token 访问；
+7. 列表接口支持分页（page / pageSize 参数），数据量大时避免全表传输。
 
 ## 数据库说明
 数据表 `user` 字段：
@@ -31,7 +32,8 @@
 | ---- | ---- | ---- | ---- |
 | POST | /api/login | 登录，返回 JWT Token | 否 |
 | GET | /api/test | 前后端连通测试 | 否 |
-| GET | /api/user/list | 查询全部用户 | 是 |
+| GET | /api/user/list?page=1&pageSize=10 | 分页查询用户列表 | 是 |
+| GET | /api/user/detail/:id | 按ID查询单个用户 | 是 |
 | POST | /api/user/add | 新增用户 | 是 |
 | PUT | /api/user/update | 修改用户信息 | 是 |
 | DELETE | /api/user/del/:id | 根据ID删除用户 | 是 |
