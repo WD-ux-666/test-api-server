@@ -1,7 +1,8 @@
-require('dotenv').config()
+﻿require('dotenv').config()
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
+const bcrypt = require('bcryptjs')
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -22,13 +23,29 @@ const pool = mysql.createPool({
 const initTable = async()=>{
     const createTableSQL = `
     CREATE TABLE IF NOT EXISTS user(
-       id INT PRIMARY KEY AUTO_INCREMENT COMMENT'主键',
-       name VARCHAR(50) NOT NULL COMMENT'姓名',
-       age TINYINT COMMENT'年龄',
-       create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
-        )ENGINE=InnoDB DEFAULT CHARSET = utf8mb4;
+    id INT PRIMARY KEY AUTO_INCREMENT COMMENT'主键',
+    name VARCHAR(50) NOT NULL COMMENT'姓名',
+    age TINYINT COMMENT'年龄',
+    username VARCHAR(50) UNIQUE COMMENT'用户登录名',
+    password VARCHAR(100) COMMENT'密码（bcrypt加密）',
+    role VARCHAR(20) DEFAULT  'user' COMMENT '角色：admin/user',
+    create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+    )ENGINE=InnoDB DEFAULT CHARSET = utf8mb4;
        `;
        await pool.query(createTableSQL);
+
+       const adminExists = await pool.query('SELECT id FROM user WHERE username = ?',['admin']);
+       if(adminExists[0].length===0){
+        const adminPwd = bcrypt.hashSync('123456',10);
+        await pool.query('INSERT INTO user(name,age,username,password,role) VALUES(?,?,?,?,?)',
+            ['管理员',30,'admin',adminPwd,'admin']);
+       }
+       const userExists = await pool.query('SELECT id FROM user WHERE username = ?',['user']);
+       if(userExists[0].length===0){
+        const userPwd = bcrypt.hashSync('123456',10);
+        await pool.query('INSERT INTO user(name,age,username,password,role) VALUES(?,?,?,?,?)',
+            ['普通用户',25,'user',userPwd,'user']);
+       }
        console.log('数据表初始化完成，user表已就绪')
 };
 //加一个函数，自动捕获async函数中的错误
@@ -41,23 +58,31 @@ const jwt = require('jsonwebtoken')
 app.post('/api/login',asyncHandler(async(req,res)=>{
     const {username,password} = req.body
 
-    //写测试账号
-    if(username==='admin'&& password==='123456'){
-        //s生成token
-        const token = jwt.sign(
-            {username},
-            process.env.JWT_SECRET,
-            {expiresIn:process.env.JWT_EXPIRES_IN}
-        )
-
-        res.send({
-            code:200,
-            msg:'登录成功',
-            data:{token,username}
-        })
-    }else{
-        res.send({code:400,msg:'账号或密码错误'})
+    if (!username || !password){
+        return res.send({code:400,msg:'用户名和密码不能为空'})
     }
+
+    const [rows] = await pool.query('SELECT * FROM user WHERE username = ?',[username]);
+    if(rows.length==0){
+        return res.send({code:400,msg:'账号和密码错误'})
+    }
+
+    const user = rows[0];
+    const match = bcrypt.compareSync(password,user.password);
+    if(!match){
+        return res.send({code:400,msg:'账号和密码错误'})
+    }
+
+    const token = jwt.sign(
+        {id:user.id,username:user.username,role:user.role},
+        process.env.JWT_SECRET,
+        {expiresIn:process.env.JWT_EXPIRES_IN}
+    )
+    res.send({
+        code:200,
+        msg:'登录成功',
+        data:{token,username:user.username,role:user.role}
+    })
 }))
 
 //鉴权中间件
@@ -76,7 +101,13 @@ const authMiddleware = (req,res,next) =>{
         return res.status(401).send({code:401,msg:'登录过期，请重新登录'})
     }
 }
-
+//管理员权限中间件
+const requireAdmin = (req,res,next) =>{
+    if(req.user?.role !=='admin'){
+        return res.status(403).send({code:403,msg:'无权限操作，仅管理员可执行'})
+    }
+    next()
+}
 
 
 // 1. 测试接口：GET 请求，前端访问就能验证通不通
@@ -108,14 +139,14 @@ app.get('/api/user/detail/:id',authMiddleware,asyncHandler(async(req,res)=>{
 }))
 
 // 3. 新增用户
-app.post('/api/user/add',authMiddleware,asyncHandler(async (req ,res)=>{
+app.post('/api/user/add',authMiddleware,requireAdmin,asyncHandler(async (req ,res)=>{
     const{name,age}= req.body;
     if(!name) return res.send({code:400,msg:'姓名不能为空'});
         const [row] = await pool.query('INSERT INTO user(name,age) VALUES (?,?)',[name,age]);
         res.send({code:200,msg:'新增成功',insertId:row.insertId});
 }));
 // 4. 修改用户
-app.put('/api/user/update',authMiddleware,asyncHandler(async(req,res)=>{
+app.put('/api/user/update',authMiddleware,requireAdmin,asyncHandler(async(req,res)=>{
     const{id,name,age} = req.body;
     if(!id) return res.send({code:400,msg:'id不能为空'});
     if(!name) return res.send({code:400,msg:'姓名不能为空'});
@@ -124,15 +155,29 @@ app.put('/api/user/update',authMiddleware,asyncHandler(async(req,res)=>{
         res.send({code:200,msg:'修改成功'});  
 }));
 // 5. 删除用户
-app.delete('/api/user/del/:id',authMiddleware,asyncHandler(async(req,res)=>{
+app.delete('/api/user/del/:id',authMiddleware,requireAdmin,asyncHandler(async(req,res)=>{
     const id = req.params.id;
     if(!id) return res.send({code:400,msg:'id不能为空'});
         await pool.query('DELETE FROM user WHERE id=?',[id]);
         res.send({code:200,msg:'删除成功'});   
 }));
-
-
-
+//6.注册用户
+app.post('/api/register',asyncHandler(async(req,res)=>{
+    const {username,password,name,age} = req.body
+    if(!username || !password){
+        return res.send({code:400,msg:'用户名和密码不能为空'})
+    }
+    //验证用户名是否已存在
+    const [exists] = await pool.query('SELECT id FROM user WHERE username = ?',[username])
+    if(exists.length > 0){
+        return res.send({code:400,msg:'用户名已存在'})
+    }
+    // 密码加密后存入，默认角色 user
+    const hashPwd = bcrypt.hashSync(password,10)
+    await pool.query('INSERT INTO user(name,age,username,password,role) VALUES(?,?,?,?,?)',
+        [name||username,age||null,username,hashPwd,'user'])
+        res.send({code:200,msg:'注册成功'})
+}))
 app.use((err,req,res,next)=>{
     res.status(500).send({code:500,msg:'服务器错误',error:err.message});
 });
