@@ -1,0 +1,73 @@
+# 用 docker-compose 编排三个服务：MySQL + 后端 + 前端
+#
+# 目录布局要求（compose 文件在后端仓库里，前端仓库要和它并列 clone）：
+#   deploy/
+#   ├── test-api-server/     ← git clone https://github.com/WD-ux-666/test-api-server.git
+#   └── vue-admin-test/      ← git clone https://github.com/WD-ux-666/vue-admin-test.git
+#
+# 在 test-api-server 目录里执行：
+#   启动：docker compose up -d
+#   日志：docker compose logs -f
+#   停止：docker compose down
+#   重新构建（改代码后）：docker compose up -d --build
+
+services:
+  # ===== 数据库 =====
+  db:
+    image: mysql:8.0
+    container_name: vue_admin_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456     # 改成你自己的密码
+      MYSQL_DATABASE: vue_admin           # 自动创建空库，initTable 会建表
+      TZ: Asia/Shanghai
+    volumes:
+      - db_data:/var/lib/mysql           # 数据持久化：删容器数据不丢
+    ports:
+      - "3307:3306"                       # 主机 3307 → 容器 3306，避免和虚拟机本机 MySQL 冲突
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # 关键：后端容器要等 db 健康了才启动，否则 initTable 连不上数据库
+    networks:
+      - vue_admin_net
+
+  # ===== 后端 API =====
+  backend:
+    build: .                              # compose 文件就在后端仓库根目录
+    container_name: vue_admin_backend
+    environment:
+      DB_HOST: db                         # 在 compose 网络里直接用服务名当主机名
+      DB_USER: root
+      DB_PASSWORD: root123456             # 和上面 db 服务一致
+      DB_NAME: vue_admin
+      JWT_SECRET: your_jwt_secret_here    # 改成随机字符串，不要用默认值
+      JWT_EXPIRES_IN: 1d
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy        # 等 db 健康检查通过
+    ports:
+      - "3000:3000"
+    networks:
+      - vue_admin_net
+
+  # ===== 前端（nginx 托管 + API 反代）=====
+  frontend:
+    build: ../vue-admin-test              # 前端仓库和后端仓库并列时的相对路径
+    container_name: vue_admin_frontend
+    depends_on:
+      - backend
+    ports:
+      - "80:80"                           # 直接用 80 端口，访问 http://虚拟机IP 即可
+    networks:
+      - vue_admin_net
+
+# 命名卷：MySQL 数据持久化
+volumes:
+  db_data:
+
+# 自定义网络：三个容器互相用服务名通信
+networks:
+  vue_admin_net:
