@@ -1,5 +1,5 @@
 # 后端镜像：Node 18 官方 slim 版（体积小，约 200MB）
-FROM node:18-slim
+FROM node:18
 
 WORKDIR /app
 
